@@ -1,5 +1,2 @@
-streamlit
-requests
-pandas
-plotly
-psycopg2-binary
+streamlit==1.28.0
+requests==2.31.0
