@@ -188,3 +188,4 @@ if over_2_5_teams:
     st.info(f"Found {len(over_2_5_teams)} teams with this pattern.")
 else:
     st.write("No teams found with over 2.5 goals in their last 4 matches.")
+
