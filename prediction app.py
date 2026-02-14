@@ -80,7 +80,7 @@ st.set_page_config(page_title="Football Prediction App", page_icon="⚽")
 st.title("⚽ European League Prediction App")
 st.write("This app highlights matches where:")
 st.write("- A team has **5 consecutive wins**")
-st.write("- That team has **odds ≤ 1.50** in their next fixture")
+st.write("- That team has **odds between 1.50 and 2.0** in their next fixture")  # UPDATED DESCRIPTION
 
 if not API_KEY:
     st.error("⚠️ API key not found! Please set it in Streamlit Secrets or a .env file.")
@@ -122,13 +122,15 @@ for i, comp in enumerate(competitions):
         # Check home team
         if has_five_wins(home_id):
             odds = match.get('odds', {}).get('homeWin')
-            if odds and odds <= 1.50:
+            # UPDATED CONDITION: odds between 1.50 and 2.0
+            if odds and 1.50 <= odds <= 2.0:
                 flagged_matches.append((home_name, away_name, odds, comp_name))
 
         # Check away team
         if has_five_wins(away_id):
             odds = match.get('odds', {}).get('awayWin')
-            if odds and odds <= 1.50:
+            # UPDATED CONDITION: odds between 1.50 and 2.0
+            if odds and 1.50 <= odds <= 2.0:
                 flagged_matches.append((away_name, home_name, odds, comp_name))
     
     # Small delay to avoid hitting rate limits (free tier: 10 requests/minute)
@@ -144,4 +146,5 @@ if flagged_matches:
     st.info(f"Found {len(flagged_matches)} qualifying matches across {len(competitions)} leagues.")
 else:
     st.write("No qualifying matches found at this time.")
+
 
