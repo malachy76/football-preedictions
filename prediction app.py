@@ -13,6 +13,28 @@ except (KeyError, AttributeError):
 BASE_URL = "https://api.football-data.org/v4"
 headers = {"X-Auth-Token": API_KEY}
 
+# Cache for team matches to reduce API calls
+team_matches_cache = {}
+
+def get_team_last_matches(team_id, limit=5):
+    """Fetch last 'limit' matches for a team, using cache if available."""
+    if team_id in team_matches_cache:
+        return team_matches_cache[team_id]
+    
+    url = f"{BASE_URL}/teams/{team_id}/matches?status=FINISHED&limit={limit}"
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            matches = data.get('matches', [])
+            team_matches_cache[team_id] = matches
+            return matches
+        else:
+            return []
+    except Exception as e:
+        st.error(f"Error fetching matches for team {team_id}: {str(e)}")
+        return []
+
 def check_api_key():
     if not API_KEY:
         return "❌ API key not found."
@@ -20,7 +42,7 @@ def check_api_key():
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
-            return f"✅ API key works!"
+            return "✅ API key works!"
         else:
             return f"❌ API key failed. Status: {response.status_code}"
     except Exception as e:
@@ -45,24 +67,29 @@ def get_european_competitions():
         return []
 
 def has_five_wins(team_id):
-    if not API_KEY:
+    """Check if a team has won its last 5 matches (uses cached data)."""
+    matches = get_team_last_matches(team_id, 5)
+    if len(matches) < 5:
         return False
-    url = f"{BASE_URL}/teams/{team_id}/matches?status=FINISHED&limit=5"
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            return False
-        data = response.json()
-        matches = data.get('matches', [])
-        if len(matches) < 5:
-            return False
-        return all(
-            (m['score']['winner'] == "HOME_TEAM" and m['homeTeam']['id'] == team_id) or
-            (m['score']['winner'] == "AWAY_TEAM" and m['awayTeam']['id'] == team_id)
-            for m in matches
-        )
-    except:
+    return all(
+        (m['score']['winner'] == "HOME_TEAM" and m['homeTeam']['id'] == team_id) or
+        (m['score']['winner'] == "AWAY_TEAM" and m['awayTeam']['id'] == team_id)
+        for m in matches
+    )
+
+def has_over_2_5_in_last_four(team_id):
+    """Check if a team's last 4 matches each had total goals >= 3 (over 2.5)."""
+    matches = get_team_last_matches(team_id, 4)  # Get last 4 matches
+    if len(matches) < 4:
         return False
+    for match in matches[:4]:  # Use the 4 most recent matches
+        score = match.get('score', {})
+        full_time = score.get('fullTime', {})
+        home_goals = full_time.get('home') or 0
+        away_goals = full_time.get('away') or 0
+        if home_goals + away_goals < 3:
+            return False
+    return True
 
 def get_upcoming_matches(competition_id):
     url = f"{BASE_URL}/competitions/{competition_id}/matches?status=SCHEDULED"
@@ -78,9 +105,9 @@ def get_upcoming_matches(competition_id):
 # -------------------- STREAMLIT UI --------------------
 st.set_page_config(page_title="Football Prediction App", page_icon="⚽")
 st.title("⚽ European League Prediction App")
-st.write("This app highlights matches where:")
-st.write("- A team has **5 consecutive wins**")
-st.write("- That team has **odds between 1.50 and 2.0** in their next fixture")  # UPDATED DESCRIPTION
+st.write("This app highlights:")
+st.write("✅ **Teams on a 5‑win streak** with **odds between 1.50 and 2.0** in their next fixture")
+st.write("✅ **Teams whose last 4 matches all had over 2.5 goals** (total goals ≥ 3 per match)")
 
 if not API_KEY:
     st.error("⚠️ API key not found! Please set it in Streamlit Secrets or a .env file.")
@@ -101,11 +128,14 @@ if not competitions:
 
 st.success(f"Found {len(competitions)} European leagues.")
 
-flagged_matches = []
+# Containers for results
+flagged_matches = []          # (team, opponent, odds, league)
+over_2_5_teams = set()        # (team_name, league_name) to avoid duplicates
+
 progress_bar = st.progress(0, text="Analyzing matches...")
 
 for i, comp in enumerate(competitions):
-    comp_id = comp['code']  # e.g., "PL", "BL1"
+    comp_id = comp['code']      # e.g., "PL", "BL1"
     comp_name = comp['name']
     
     # Update progress
@@ -119,27 +149,30 @@ for i, comp in enumerate(competitions):
         home_name = match['homeTeam']['name']
         away_name = match['awayTeam']['name']
 
-        # Check home team
+        # ---- 5‑win streak + odds 1.50–2.0 ----
         if has_five_wins(home_id):
             odds = match.get('odds', {}).get('homeWin')
-            # UPDATED CONDITION: odds between 1.50 and 2.0
             if odds and 1.50 <= odds <= 2.0:
                 flagged_matches.append((home_name, away_name, odds, comp_name))
 
-        # Check away team
         if has_five_wins(away_id):
             odds = match.get('odds', {}).get('awayWin')
-            # UPDATED CONDITION: odds between 1.50 and 2.0
             if odds and 1.50 <= odds <= 2.0:
                 flagged_matches.append((away_name, home_name, odds, comp_name))
+
+        # ---- Over 2.5 goals in last 4 matches ----
+        if has_over_2_5_in_last_four(home_id):
+            over_2_5_teams.add((home_name, comp_name))
+        if has_over_2_5_in_last_four(away_id):
+            over_2_5_teams.add((away_name, comp_name))
     
-    # Small delay to avoid hitting rate limits (free tier: 10 requests/minute)
+    # Small delay to respect rate limits (free tier: 10 requests/minute)
     time.sleep(0.5)
 
 progress_bar.empty()
 
-# Display results
-st.subheader("📊 Predicted Matches")
+# -------------------- DISPLAY RESULTS --------------------
+st.subheader("📊 Predicted Matches (5‑win streak + odds 1.50–2.0)")
 if flagged_matches:
     for team, opponent, odds, league in flagged_matches:
         st.success(f"**{team}** vs {opponent} | Odds: {odds:.2f} | League: {league}")
@@ -147,4 +180,11 @@ if flagged_matches:
 else:
     st.write("No qualifying matches found at this time.")
 
-
+st.subheader("⚽ Teams with Over 2.5 Goals in Last 4 Matches")
+if over_2_5_teams:
+    # Sort alphabetically by league then team
+    for team, league in sorted(over_2_5_teams, key=lambda x: (x[1], x[0])):
+        st.write(f"• **{team}** ({league})")
+    st.info(f"Found {len(over_2_5_teams)} teams with this pattern.")
+else:
+    st.write("No teams found with over 2.5 goals in their last 4 matches.")
