@@ -118,24 +118,52 @@ if st.button("Check API Key"):
         result = check_api_key()
         st.info(result)
 
-# Fetch all European competitions
+# ---------- COMPETITION FETCHING WITH FALLBACK ----------
 with st.spinner("Fetching European leagues..."):
-    competitions = get_european_competitions()
+    dynamic_comps = get_european_competitions()
 
-if not competitions:
-    st.warning("No European competitions found. Your API key may not have access or there might be an issue.")
-    st.stop()
+# Debug: show what the API returned
+st.write("### 🔍 Debug: Competitions from API (UEFA filter)")
+if dynamic_comps:
+    for comp in dynamic_comps:
+        st.write(f"- {comp['name']} (code: {comp['code']})")
+else:
+    st.write("No competitions returned with UEFA filter.")
 
-st.success(f"Found {len(competitions)} European leagues.")
+# Fallback to hardcoded list if too few dynamic leagues
+MIN_LEAGUES = 5
+if len(dynamic_comps) < MIN_LEAGUES:
+    st.warning(f"Only {len(dynamic_comps)} European leagues found via API. Falling back to hardcoded list of major leagues.")
+    competitions = [
+        {"code": "PL", "name": "Premier League"},
+        {"code": "ELC", "name": "Championship"},
+        {"code": "BL1", "name": "Bundesliga"},
+        {"code": "BL2", "name": "2. Bundesliga"},
+        {"code": "PD", "name": "La Liga"},
+        {"code": "SD", "name": "Segunda Division"},
+        {"code": "SA", "name": "Serie A"},
+        {"code": "FL1", "name": "Ligue 1"},
+        {"code": "DED", "name": "Eredivisie"},
+        {"code": "PPL", "name": "Primeira Liga"},
+    ]
+else:
+    competitions = dynamic_comps
+
+st.success(f"Analyzing {len(competitions)} leagues.")
+
+# Optional: show the final list
+with st.expander("Show leagues being analyzed"):
+    for comp in competitions:
+        st.write(f"- {comp['name']} ({comp['code']})")
 
 # Containers for results
-flagged_matches = []          # (team, opponent, odds, league)
+flagged_matches = []          # (team, opponent, odds, league, odds_available)
 over_2_5_teams = set()        # (team_name, league_name) to avoid duplicates
 
 progress_bar = st.progress(0, text="Analyzing matches...")
 
 for i, comp in enumerate(competitions):
-    comp_id = comp['code']      # e.g., "PL", "BL1"
+    comp_id = comp['code']
     comp_name = comp['name']
     
     # Update progress
@@ -143,22 +171,34 @@ for i, comp in enumerate(competitions):
     
     matches = get_upcoming_matches(comp_id)
     
+    # Optional: debug sample match odds
+    if matches and i == 0:  # only first league to avoid spam
+        sample = matches[0]
+        st.write(f"Sample match in {comp_name}: odds = {sample.get('odds')}")
+
     for match in matches:
         home_id = match['homeTeam']['id']
         away_id = match['awayTeam']['id']
         home_name = match['homeTeam']['name']
         away_name = match['awayTeam']['name']
 
-        # ---- 5‑win streak + odds 1.50–2.0 ----
+        # ---- 5‑win streak + odds 1.50–2.0 (if odds exist) ----
         if has_five_wins(home_id):
             odds = match.get('odds', {}).get('homeWin')
-            if odds and 1.50 <= odds <= 2.0:
-                flagged_matches.append((home_name, away_name, odds, comp_name))
+            if odds:
+                if 1.50 <= odds <= 2.0:
+                    flagged_matches.append((home_name, away_name, odds, comp_name, True))
+            else:
+                # Still show the streak but indicate odds missing
+                flagged_matches.append((home_name, away_name, None, comp_name, False))
 
         if has_five_wins(away_id):
             odds = match.get('odds', {}).get('awayWin')
-            if odds and 1.50 <= odds <= 2.0:
-                flagged_matches.append((away_name, home_name, odds, comp_name))
+            if odds:
+                if 1.50 <= odds <= 2.0:
+                    flagged_matches.append((away_name, home_name, odds, comp_name, True))
+            else:
+                flagged_matches.append((away_name, home_name, None, comp_name, False))
 
         # ---- Over 2.5 goals in last 4 matches ----
         if has_over_2_5_in_last_four(home_id):
@@ -172,20 +212,25 @@ for i, comp in enumerate(competitions):
 progress_bar.empty()
 
 # -------------------- DISPLAY RESULTS --------------------
-st.subheader("📊 Predicted Matches (5‑win streak + odds 1.50–2.0)")
+st.subheader("📊 Predicted Matches (5‑win streak)")
 if flagged_matches:
-    for team, opponent, odds, league in flagged_matches:
-        st.success(f"**{team}** vs {opponent} | Odds: {odds:.2f} | League: {league}")
-    st.info(f"Found {len(flagged_matches)} qualifying matches across {len(competitions)} leagues.")
+    for team, opponent, odds, league, odds_avail in flagged_matches:
+        if odds_avail:
+            st.success(f"**{team}** vs {opponent} | Odds: {odds:.2f} | League: {league}")
+        else:
+            st.info(f"**{team}** vs {opponent} | (odds unavailable) | League: {league}")
+    st.info(f"Found {len(flagged_matches)} teams on a 5‑win streak.")
 else:
-    st.write("No qualifying matches found at this time.")
+    st.write("No teams found with a 5‑win streak in upcoming matches.")
 
 st.subheader("⚽ Teams with Over 2.5 Goals in Last 4 Matches")
 if over_2_5_teams:
-    # Sort alphabetically by league then team
     for team, league in sorted(over_2_5_teams, key=lambda x: (x[1], x[0])):
         st.write(f"• **{team}** ({league})")
     st.info(f"Found {len(over_2_5_teams)} teams with this pattern.")
 else:
     st.write("No teams found with over 2.5 goals in their last 4 matches.")
 
+# Additional notes about limitations
+st.markdown("---")
+st.caption("Note: Odds data may not be provided by the football-data.org API for all leagues. Teams with 5‑win streaks are shown even without odds, but the odds filter (1.50–2.0) is only applied when odds exist.")
